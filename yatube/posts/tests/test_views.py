@@ -191,6 +191,7 @@ class PaginatorViewsTest(TestCase):
         Post.objects.bulk_create(cls.post)
 
     def setUp(self):
+        cache.clear()
         self.authorized_client = Client()
         self.authorized_client.force_login(self.user)
 
