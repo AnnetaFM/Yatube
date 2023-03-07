@@ -1,6 +1,7 @@
 import shutil
 import tempfile
 
+from http import HTTPStatus
 from django.test import Client, TestCase, override_settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
@@ -8,7 +9,7 @@ from django.conf import settings
 from django import forms
 from django.core.cache import cache
 
-from posts.models import Follow, Group, Post, User
+from posts.models import Comment, Follow, Group, Post, User
 
 
 TEMP_MEDIA_ROOT = tempfile.mkdtemp(dir=settings.BASE_DIR)
@@ -157,6 +158,28 @@ class PostViewsTest(TestCase):
                 form_field = response.context["page_obj"]
                 self.assertNotIn(expected, form_field)
 
+
+class CacheTest(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user = User.objects.create_user(username='user')
+        cls.group = Group.objects.create(
+            title='Тестовая группа',
+            slug='test-group',
+            description='Тестовое описание группы',
+        )
+        cls.post = Post.objects.create(
+            text='Тестовый текст поста',
+            author=cls.user,
+            group=cls.group,
+        )
+
+    def setUp(self):
+        cache.clear()
+        self.authorized_client = Client()
+        self.authorized_client.force_login(self.user)
+
     def test_cache(self):
         """Проверка работы кэша."""
         response = self.authorized_client.get(reverse("posts:index"))
@@ -238,13 +261,16 @@ class FollowViewsTest(TestCase):
             reverse(
                 'posts:profile_follow',
                 kwargs={'username': self.post_follower}))
-        follow = Follow.objects.all().latest('id')
         self.assertEqual(Follow.objects.count(), count_follow + 1)
-        self.assertEqual(follow.author_id, self.post_follower.id)
-        self.assertEqual(follow.user_id, self.user.id)
+        self.assertTrue(
+            Follow.objects.filter(
+                user=self.user,
+                author=self.post_follower
+            ).exists()
+        )
 
     def test_unfollow_on_user(self):
-        """Авторизованный пользователь может отдписываться."""
+        """Авторизованный пользователь может отписываться."""
         Follow.objects.create(
             user=self.user,
             author=self.post_follower)
@@ -254,6 +280,12 @@ class FollowViewsTest(TestCase):
                 'posts:profile_unfollow',
                 kwargs={'username': self.post_follower}))
         self.assertEqual(Follow.objects.count(), count_follow - 1)
+        self.assertFalse(
+            Follow.objects.filter(
+                user=self.user,
+                author=self.post_follower
+            ).exists()
+        )
 
     def test_follow_on_authors(self):
         """Новая запись пользователя появляется в ленте подписчиков."""
@@ -269,3 +301,87 @@ class FollowViewsTest(TestCase):
         response = self.author_client.get(
             reverse('posts:follow_index'))
         self.assertNotIn(self.post, response.context['page_obj'].object_list)
+
+
+# Видела у некоторых ребят в группе, что они выносили тестирование комментариев
+# отдельным классом. Насколько это имеет смысл?
+# И как правильнее? У нас в ЯП нет в уроках информации по этому поводу.
+class CommentViewTest(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user = User.objects.create_user(
+            username='UserAutorized'
+        )
+        cls.group = Group.objects.create(
+            title='Тестовая группа',
+            slug='test-group',
+            description='Тестовое описание группц',
+        )
+        cls.post = Post.objects.create(
+            text='Тестовый пост',
+            author=cls.user,
+            group=cls.group,
+        )
+        cls.comment = Comment.objects.create(
+            author=cls.user,
+            post=cls.post,
+            text='Тестовый комментарий',
+        )
+
+    def setUp(self):
+        cache.clear()
+        self.guest_client = Client()
+        self.authorized_client = Client()
+        self.authorized_client.force_login(self.user)
+
+    def test_comments_by_authorized_user(self):
+        """Проверка возможности комментировать посты
+        авторизованной учеткой."""
+        comment_count = Comment.objects.count()
+        form_data = {
+            'author': self.user,
+            'post': self.post,
+            'text': 'Тестовый комментарий',
+        }
+        response = self.authorized_client.post(
+            reverse('posts:add_comment', kwargs={'post_id': self.post.id}),
+            data=form_data,
+            follow=True
+        )
+        self.assertEqual(Comment.objects.count(), comment_count + 1)
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+
+    def test_comments_checking_add_by_guest_user(self):
+        """Проверка возможности комментировать посты
+         неавторизованной учеткой."""
+        comment_count = Comment.objects.count()
+        form_data = {
+            'author': self.user,
+            'post': self.post,
+            'text': 'Тестовый комментарий',
+        }
+        response = self.guest_client.post(
+            reverse('posts:add_comment', kwargs={'post_id': self.post.id}),
+            data=form_data,
+            follow=True
+        )
+        self.assertEqual(Comment.objects.count(), comment_count)
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+
+    def test_comments_checking_render_on_page(self):
+        """Проверка успешной отправки комментария на страницу."""
+        response_authorized = self.authorized_client.get(
+            reverse('posts:post_detail', kwargs={'post_id': self.post.id})
+        )
+        response_guest = self.guest_client.get(
+            reverse('posts:post_detail', kwargs={'post_id': self.post.id})
+        )
+        self.assertEqual(
+            response_authorized.context['comments'][0],
+            self.comment
+        )
+        self.assertEqual(
+            response_guest.context['comments'][0],
+            self.comment
+        )

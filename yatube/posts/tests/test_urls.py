@@ -3,7 +3,7 @@ from django.test import TestCase, Client
 from django.urls import reverse
 from django.core.cache import cache
 
-from posts.models import Comment, Group, Post, User
+from posts.models import Group, Post, User
 
 
 class PostURLTests(TestCase):
@@ -25,11 +25,6 @@ class PostURLTests(TestCase):
             text='Тестовый пост',
             author=cls.user_author,
             group=cls.group,
-        )
-        cls.comment = Comment.objects.create(
-            author=cls.user,
-            post=cls.post,
-            text='Тестовый комментарий',
         )
         cls.public_url_names = [
             '/',
@@ -110,57 +105,3 @@ class PostURLTests(TestCase):
         """Проверка несуществующей страницы."""
         response = self.guest_client.get('/unexisting_page/')
         self.assertEqual(response.status_code, HTTPStatus.NOT_FOUND)
-
-# Видела у некоторых ребят в группе, что они выносили тестирование комментариев
-# отдельным классом. Насколько это имеет смысл?
-# И как правильнее? У нас в ЯП нет в уроках информации по этому поводу.
-    def test_comments_by_authorized_user(self):
-        """Проверка возможности комментировать посты
-        авторизованной учеткой."""
-        comment_count = Comment.objects.count()
-        form_data = {
-            'author': self.user,
-            'post': self.post,
-            'text': 'Тестовый комментарий',
-        }
-        response = self.authorized_client.post(
-            reverse('posts:add_comment', kwargs={'post_id': self.post.id}),
-            data=form_data,
-            follow=True
-        )
-        self.assertEqual(Comment.objects.count(), comment_count + 1)
-        self.assertEqual(response.status_code, HTTPStatus.OK)
-
-    def test_comments_checking_add_by_guest_user(self):
-        """Проверка возможности комментировать посты
-         неавторизованной учеткой."""
-        comment_count = Comment.objects.count()
-        form_data = {
-            'author': self.user,
-            'post': self.post,
-            'text': 'Тестовый комментарий',
-        }
-        response = self.guest_client.post(
-            reverse('posts:add_comment', kwargs={'post_id': self.post.id}),
-            data=form_data,
-            follow=True
-        )
-        self.assertEqual(Comment.objects.count(), comment_count)
-        self.assertEqual(response.status_code, HTTPStatus.OK)
-
-    def test_comments_checking_render_on_page(self):
-        """Проверка успешной отправки комментария на страницу."""
-        response_authorized = self.authorized_client.get(
-            reverse('posts:post_detail', kwargs={'post_id': self.post.id})
-        )
-        response_guest = self.guest_client.get(
-            reverse('posts:post_detail', kwargs={'post_id': self.post.id})
-        )
-        self.assertEqual(
-            response_authorized.context['comments'][0],
-            self.comment
-        )
-        self.assertEqual(
-            response_guest.context['comments'][0],
-            self.comment
-        )
